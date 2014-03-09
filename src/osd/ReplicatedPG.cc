@@ -8860,6 +8860,10 @@ void ReplicatedPG::apply_and_flush_repops(bool requeue)
 
 void ReplicatedPG::on_flushed()
 {
+  // verify that there are no stray objects
+  if (is_primary())
+    check_local();
+
   assert(flushes_in_progress > 0);
   flushes_in_progress--;
   if (flushes_in_progress == 0) {

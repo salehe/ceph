@@ -1796,7 +1796,6 @@ public:
     };
 
     struct WaitUpThru;
-    struct WaitFlushedPeering;
 
     struct GetMissing : boost::statechart::state< GetMissing, Peering >, NamedState {
       set<pg_shard_t> peer_missing_requested;
@@ -1807,23 +1806,10 @@ public:
       typedef boost::mpl::list <
 	boost::statechart::custom_reaction< QueryState >,
 	boost::statechart::custom_reaction< MLogRec >,
-	boost::statechart::transition< NeedUpThru, WaitUpThru >,
-	boost::statechart::transition< CheckRepops, WaitFlushedPeering>
+	boost::statechart::transition< NeedUpThru, WaitUpThru >
 	> reactions;
       boost::statechart::result react(const QueryState& q);
       boost::statechart::result react(const MLogRec& logevt);
-    };
-
-    struct WaitFlushedPeering :
-      boost::statechart::state< WaitFlushedPeering, Peering>, NamedState {
-      WaitFlushedPeering(my_context ctx);
-      void exit() {}
-      typedef boost::mpl::list <
-	boost::statechart::custom_reaction< QueryState >,
-	boost::statechart::custom_reaction< FlushedEvt >
-      > reactions;
-      boost::statechart::result react(const FlushedEvt& evt);
-      boost::statechart::result react(const QueryState& q);
     };
 
     struct WaitUpThru : boost::statechart::state< WaitUpThru, Peering >, NamedState {
@@ -1833,7 +1819,6 @@ public:
       typedef boost::mpl::list <
 	boost::statechart::custom_reaction< QueryState >,
 	boost::statechart::custom_reaction< ActMap >,
-	boost::statechart::transition< CheckRepops, WaitFlushedPeering>,
 	boost::statechart::custom_reaction< MLogRec >
 	> reactions;
       boost::statechart::result react(const QueryState& q);
