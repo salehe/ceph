@@ -6128,7 +6128,6 @@ PG::RecoveryState::Active::Active(my_context ctx)
 	       *context< RecoveryMachine >().get_query_map(),
 	       context< RecoveryMachine >().get_info_map(),
 	       context< RecoveryMachine >().get_recovery_ctx());
-  assert(pg->is_active());
   dout(10) << "Activate Finished" << dendl;
 }
 
