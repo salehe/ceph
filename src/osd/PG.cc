@@ -182,6 +182,7 @@ PG::PG(OSDService *o, OSDMapRef curmap,
   pg_stats_publish_lock("PG::pg_stats_publish_lock"),
   pg_stats_publish_valid(false),
   osr(osd->osr_registry.lookup_or_create(p, (stringify(p)))),
+  all_replicas_activated(false),
   finish_sync_event(NULL),
   scrub_after_recovery(false),
   active_pushes(0),
@@ -1419,7 +1420,6 @@ void PG::activate(ObjectStore::Transaction& t,
   }
 
   // twiddle pg state
-  state_set(PG_STATE_ACTIVE);
   state_clear(PG_STATE_DOWN);
 
   send_notify = false;
@@ -1441,10 +1441,6 @@ void PG::activate(ObjectStore::Transaction& t,
   // write pg info, log
   dirty_info = true;
   dirty_big_info = true; // maybe
-
-  // verify that there are no stray objects
-  if (is_primary())
-    check_local();
 
   // find out when we commit
   tfin.push_back(new C_PG_ActivateCommitted(this, query_epoch));
@@ -1630,42 +1626,7 @@ void PG::activate(ObjectStore::Transaction& t,
     if (get_osdmap()->get_pg_size(info.pgid.pgid) > acting.size())
       state_set(PG_STATE_DEGRADED);
 
-    // all clean?
-    if (needs_recovery()) {
-      dout(10) << "activate not all replicas are up-to-date, queueing recovery" << dendl;
-      queue_peering_event(
-        CephPeeringEvtRef(
-          new CephPeeringEvt(
-            get_osdmap()->get_epoch(),
-            get_osdmap()->get_epoch(),
-            DoRecovery())));
-    } else if (needs_backfill()) {
-      dout(10) << "activate queueing backfill" << dendl;
-      queue_peering_event(
-        CephPeeringEvtRef(
-          new CephPeeringEvt(
-            get_osdmap()->get_epoch(),
-            get_osdmap()->get_epoch(),
-            RequestBackfill())));
-    } else {
-      dout(10) << "activate all replicas clean, no recovery" << dendl;
-      queue_peering_event(
-        CephPeeringEvtRef(
-          new CephPeeringEvt(
-            get_osdmap()->get_epoch(),
-            get_osdmap()->get_epoch(),
-            AllReplicasRecovered())));
-    }
-
-    publish_stats_to_osd();
   }
-
-  // waiters
-  if (!is_replay() && flushes_in_progress == 0) {
-    requeue_ops(waiting_for_active);
-  }
-
-  on_activate();
 }
 
 bool PG::op_has_sufficient_caps(OpRequestRef op)
@@ -6380,7 +6341,19 @@ boost::statechart::result PG::RecoveryState::Active::react(const QueryState& q)
 
 boost::statechart::result PG::RecoveryState::Active::react(const AllReplicasActivated &evt)
 {
+  PG *pg = context< RecoveryMachine >().pg;
+  pg->all_replicas_activated = true;
   all_replicas_activated = true;
+
+  pg->state_set(PG_STATE_ACTIVE);
+
+  // waiters
+  if (!pg->is_replay() && pg->flushes_in_progress == 0) {
+    pg->requeue_ops(pg->waiting_for_active);
+  }
+
+  pg->on_activate();
+
   return discard_event();
 }
 
@@ -6392,6 +6365,7 @@ void PG::RecoveryState::Active::exit()
 
   pg->backfill_reserved = false;
   pg->backfill_reserving = false;
+  pg->all_replicas_activated = false;
   pg->state_clear(PG_STATE_DEGRADED);
   pg->state_clear(PG_STATE_BACKFILL_TOOFULL);
   pg->state_clear(PG_STATE_BACKFILL_WAIT);
@@ -7097,7 +7071,7 @@ PG::RecoveryState::GetMissing::GetMissing(my_context ctx)
     }
 
     // all good!
-    post_event(CheckRepops());
+    post_event(Activate(pg->get_osdmap()->get_epoch()));
   }
 }
 
@@ -7116,7 +7090,7 @@ boost::statechart::result PG::RecoveryState::GetMissing::react(const MLogRec& lo
     } else {
       dout(10) << "Got last missing, don't need missing "
 	       << "posting CheckRepops" << dendl;
-      post_event(CheckRepops());
+      post_event(Activate(pg->get_osdmap()->get_epoch()));
     }
   }
   return discard_event();
@@ -7156,35 +7130,6 @@ void PG::RecoveryState::GetMissing::exit()
   pg->osd->recoverystate_perf->tinc(rs_getmissing_latency, dur);
 }
 
-/*---WaitFlushedPeering---*/
-PG::RecoveryState::WaitFlushedPeering::WaitFlushedPeering(my_context ctx)
-  : my_base(ctx),
-    NamedState(context< RecoveryMachine >().pg->cct, "Started/Primary/Peering/WaitFlushedPeering")
-{
-  PG *pg = context< RecoveryMachine >().pg;
-  context< RecoveryMachine >().log_enter(state_name);
-  if (context< RecoveryMachine >().pg->flushes_in_progress == 0)
-    post_event(Activate(pg->get_osdmap()->get_epoch()));
-}
-
-boost::statechart::result
-PG::RecoveryState::WaitFlushedPeering::react(const FlushedEvt &evt)
-{
-  PG *pg = context< RecoveryMachine >().pg;
-  pg->on_flushed();
-  return transit< WaitFlushedPeering >();
-}
-
-boost::statechart::result
-PG::RecoveryState::WaitFlushedPeering::react(const QueryState &q)
-{
-  q.f->open_object_section("state");
-  q.f->dump_string("name", state_name);
-  q.f->dump_stream("enter_time") << enter_time;
-  q.f->dump_string("comment", "waiting for flush");
-  return forward_event();
-}
-
 /*------WaitUpThru--------*/
 PG::RecoveryState::WaitUpThru::WaitUpThru(my_context ctx)
   : my_base(ctx),
@@ -7197,7 +7142,7 @@ boost::statechart::result PG::RecoveryState::WaitUpThru::react(const ActMap& am)
 {
   PG *pg = context< RecoveryMachine >().pg;
   if (!pg->need_up_thru) {
-    post_event(CheckRepops());
+    post_event(Activate(pg->get_osdmap()->get_epoch()));
   }
   return forward_event();
 }

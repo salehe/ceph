@@ -1071,7 +1071,7 @@ void ReplicatedPG::do_request(
     return;
   }
 
-  if (!is_active()) {
+  if (!is_active() || (is_primary() && !all_replicas_activated)) {
     // Delay unless PGBackend says it's ok
     if (pgbackend->can_handle_while_inactive(op)) {
       bool handled = pgbackend->handle_message(op);
@@ -8885,6 +8885,10 @@ void ReplicatedPG::apply_and_flush_repops(bool requeue)
 
 void ReplicatedPG::on_flushed()
 {
+  // verify that there are no stray objects
+  if (is_primary())
+    check_local();
+
   assert(flushes_in_progress > 0);
   flushes_in_progress--;
   if (flushes_in_progress == 0) {
@@ -8944,6 +8948,35 @@ void ReplicatedPG::on_shutdown()
 
 void ReplicatedPG::on_activate()
 {
+  // all clean?
+  if (needs_recovery()) {
+    dout(10) << "activate not all replicas are up-to-date, queueing recovery" << dendl;
+    queue_peering_event(
+      CephPeeringEvtRef(
+	new CephPeeringEvt(
+	  get_osdmap()->get_epoch(),
+	  get_osdmap()->get_epoch(),
+	  DoRecovery())));
+  } else if (needs_backfill()) {
+    dout(10) << "activate queueing backfill" << dendl;
+    queue_peering_event(
+      CephPeeringEvtRef(
+	new CephPeeringEvt(
+	  get_osdmap()->get_epoch(),
+	  get_osdmap()->get_epoch(),
+	  RequestBackfill())));
+  } else {
+    dout(10) << "activate all replicas clean, no recovery" << dendl;
+    queue_peering_event(
+      CephPeeringEvtRef(
+	new CephPeeringEvt(
+	  get_osdmap()->get_epoch(),
+	  get_osdmap()->get_epoch(),
+	  AllReplicasRecovered())));
+  }
+
+  publish_stats_to_osd();
+
   if (!backfill_targets.empty()) {
     last_backfill_started = earliest_backfill();
     new_backfill = true;
