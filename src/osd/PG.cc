@@ -1700,7 +1700,7 @@ void PG::queue_op(OpRequestRef op)
 
 void PG::replay_queued_ops()
 {
-  assert(is_replay() && is_active());
+  assert(is_replay());
   eversion_t c = info.last_update;
   list<OpRequestRef> replay;
   dout(10) << "replay_queued_ops" << dendl;
@@ -6177,7 +6177,6 @@ boost::statechart::result PG::RecoveryState::Active::react(const ActMap&)
 {
   PG *pg = context< RecoveryMachine >().pg;
   dout(10) << "Active: handling ActMap" << dendl;
-  assert(pg->is_active());
   assert(pg->is_primary());
 
   if (pg->have_unfound()) {
@@ -6215,7 +6214,6 @@ boost::statechart::result PG::RecoveryState::Active::react(const ActMap&)
 boost::statechart::result PG::RecoveryState::Active::react(const MNotifyRec& notevt)
 {
   PG *pg = context< RecoveryMachine >().pg;
-  assert(pg->is_active());
   assert(pg->is_primary());
   if (pg->peer_info.count(notevt.from)) {
     dout(10) << "Active: got notify from " << notevt.from 
@@ -6240,7 +6238,6 @@ boost::statechart::result PG::RecoveryState::Active::react(const MNotifyRec& not
 boost::statechart::result PG::RecoveryState::Active::react(const MInfoRec& infoevt)
 {
   PG *pg = context< RecoveryMachine >().pg;
-  assert(pg->is_active());
   assert(pg->is_primary());
 
   assert(!pg->actingbackfill.empty());
