@@ -1751,6 +1751,12 @@ void PG::_activate_committed(epoch_t e)
     i.info.history.last_epoch_started = e;
     m->pg_list.push_back(make_pair(i, pg_interval_map_t()));
     osd->send_message_osd_cluster(get_primary().osd, m, get_osdmap()->get_epoch());
+
+    pg->state_set(PG_STATE_ACTIVE);
+    // waiters
+    if (pg->flushes_in_progress == 0) {
+      pg->requeue_ops(pg->waiting_for_active);
+    }
   }
 
   if (dirty_info) {
