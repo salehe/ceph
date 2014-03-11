@@ -1781,6 +1781,8 @@ void PG::all_activated_and_committed()
   share_pg_info();
   publish_stats_to_osd();
 
+  all_replicas_activated = true;
+
   queue_peering_event(
     CephPeeringEvtRef(
       new CephPeeringEvt(
@@ -6252,10 +6254,10 @@ boost::statechart::result PG::RecoveryState::Active::react(const MInfoRec& infoe
     dout(10) << " peer osd." << infoevt.from << " activated and committed" 
 	     << dendl;
     pg->peer_activated.insert(infoevt.from);
-  }
 
-  if (pg->peer_activated.size() == pg->actingbackfill.size()) {
-    pg->all_activated_and_committed();
+    if (pg->peer_activated.size() == pg->actingbackfill.size()) {
+      pg->all_activated_and_committed();
+    }
   }
   return discard_event();
 }
@@ -6338,7 +6340,6 @@ boost::statechart::result PG::RecoveryState::Active::react(const QueryState& q)
 boost::statechart::result PG::RecoveryState::Active::react(const AllReplicasActivated &evt)
 {
   PG *pg = context< RecoveryMachine >().pg;
-  pg->all_replicas_activated = true;
   all_replicas_activated = true;
 
   pg->state_set(PG_STATE_ACTIVE);
