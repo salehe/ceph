@@ -1754,8 +1754,8 @@ void PG::_activate_committed(epoch_t e)
 
     pg->state_set(PG_STATE_ACTIVE);
     // waiters
-    if (pg->flushes_in_progress == 0) {
-      pg->requeue_ops(pg->waiting_for_active);
+    if (flushes_in_progress == 0) {
+      requeue_ops(waiting_for_active);
     }
   }
 
